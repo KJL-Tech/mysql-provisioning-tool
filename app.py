@@ -13,24 +13,37 @@ st.set_page_config(page_title="MySQL Provisioner Pro", page_icon="🛡️")
 
 # --- SECURITY LOGIC (RBAC) ---
 def get_privileges_by_role(role_name):
-    """Maps business role to MySQL Privileges."""
+    """
+    Maps the business role (from Excel) to specific MySQL Privileges.
+    Implements the Principle of Least Privilege (PoLP).
+    """
     role_upper = role_name.upper().strip()
+    
+    # 1. ADMINS / OWNERS (Full Control)
     if role_upper in ['DBO', 'ADMIN', 'OWNER', 'MIGRATOR']:
         return "ALL PRIVILEGES"
-    elif role_upper in ['RO', 'READ', 'READER', 'REPORT']:
+    
+    # 2. READ ONLY (Reporting, Analytics) - Changed primary role to READ
+    elif role_upper in ['READ', 'READER', 'RO', 'REPORT', 'ANALYTICS']:
         return "SELECT"
+    
+    # 3. STANDARD APP / BATCH (Data Manipulation - No DDL)
     else:
         return "SELECT, INSERT, UPDATE, DELETE, EXECUTE, SHOW VIEW"
 
 # --- HELPER FUNCTIONS ---
 def generate_password(length=20):
+    """Generates a cryptographically secure, random password."""
     alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
     while True:
         password = ''.join(secrets.choice(alphabet) for i in range(length))
-        if (any(c.islower() for c in password) and any(c.isupper() for c in password) and sum(c.isdigit() for c in password) >= 3):
+        if (any(c.islower() for c in password) 
+                and any(c.isupper() for c in password) 
+                and sum(c.isdigit() for c in password) >= 3):
             return password
 
 def create_local_files(project_name, env, users_data, db_host, db_port):
+    """Generates folder structure and .env files locally for distribution."""
     folder_name = f"{project_name}_{env}"
     base_path = os.path.join("DIST_TEMP", folder_name)
     os.makedirs(base_path, exist_ok=True)
@@ -39,6 +52,7 @@ def create_local_files(project_name, env, users_data, db_host, db_port):
     env_content += f"# Generated on: {datetime.now()}\n"
     env_content += f"DB_HOST={db_host}\n"
     env_content += f"DB_PORT={db_port}\n"
+    
     db_name = f"{project_name.lower()}_{env.lower()}"
     env_content += f"DB_NAME={db_name}\n\n"
     
@@ -53,7 +67,10 @@ def create_local_files(project_name, env, users_data, db_host, db_port):
         f.write(env_content)
 
 def get_db_connection(host, port, user, password, use_enterprise_auth):
-    """Handles connection logic depending on Auth Type."""
+    """
+    Handles database connection. 
+    Supports standard auth and Enterprise Auth (LDAP/PAM) via mysql_clear_password.
+    """
     config = {
         'host': host,
         'port': int(port),
@@ -62,11 +79,9 @@ def get_db_connection(host, port, user, password, use_enterprise_auth):
         'connect_timeout': 10
     }
     
-    # MAGICZNA LINIJKA DLA IDM/LDAP/PAM
+    # Key configuration for IDM/LDAP/PAM authentication
     if use_enterprise_auth:
         config['auth_plugin'] = 'mysql_clear_password'
-        # W niektórych konfiguracjach Enterprise wymagane jest też wyłączenie SSL check
-        # lub wskazanie certyfikatu, ale 'mysql_clear_password' to 90% sukcesu.
     
     return mysql.connector.connect(**config)
 
@@ -82,11 +97,11 @@ with st.sidebar:
     
     st.markdown("---")
     st.info("Log in with your IDM/AD Credentials")
-    db_user = st.text_input("Your Username (e.g. j.kowalski)", value="")
+    db_user = st.text_input("Your Username (e.g. j.smith)", value="")
     db_pass = st.text_input("Your Password", type="password")
     
-    # NOWA OPCJA
-    enterprise_auth = st.checkbox("Enterprise Auth (LDAP/PAM/IDM)", value=False, help="Check this if you use Active Directory/LDAP credentials to login.")
+    # Checkbox for Enterprise Authentication
+    enterprise_auth = st.checkbox("Enterprise Auth (LDAP/PAM/IDM)", value=False, help="Enable this for Active Directory/LDAP credentials.")
     
     if st.button("Test Connection"):
         try:
@@ -97,10 +112,11 @@ with st.sidebar:
         except Error as e:
             st.error(f"Connection Failed: {e}")
         except ValueError:
-            st.error("Port must be a number!")
+            st.error("Port must be a valid number!")
 
-# Main Section
+# Main Section - File Upload
 st.header("1. Upload Project Definitions")
+st.info("Required Excel columns: `Project_Name`, `Environment`, `Roles` (e.g. app, batch, dbo, read)")
 uploaded_file = st.file_uploader("Select Excel File", type=['xlsx'])
 
 if uploaded_file is not None and db_pass:
@@ -108,9 +124,10 @@ if uploaded_file is not None and db_pass:
     st.dataframe(df.head())
     
     col1, col2 = st.columns(2)
-    dry_run = col1.checkbox("Simulation Mode (Dry Run)", value=True)
+    dry_run = col1.checkbox("Simulation Mode (Dry Run - No DB changes)", value=True)
     
     if st.button("🚀 RUN PROVISIONING", type="primary"):
+        # Clean up previous temporary files
         if os.path.exists("DIST_TEMP"):
             shutil.rmtree("DIST_TEMP")
         os.makedirs("DIST_TEMP")
@@ -127,7 +144,7 @@ if uploaded_file is not None and db_pass:
             roles = [r.strip() for r in row['Roles'].split(',')]
             db_name = f"{project.lower()}_{env.lower()}"
             
-            # SQL Logic
+            # Prepare SQL Commands
             sql_commands = []
             sql_commands.append(f"CREATE DATABASE IF NOT EXISTS {db_name} CHARACTER SET utf8mb4;")
             
@@ -136,8 +153,11 @@ if uploaded_file is not None and db_pass:
             for role in roles:
                 username = f"{project.lower()}_{env.lower()}_{role.lower()}"
                 password = generate_password()
+                
+                # Determine privileges based on role
                 privileges = get_privileges_by_role(role)
                 
+                # Idempotent user creation logic
                 sql_commands.append(f"CREATE USER IF NOT EXISTS '{username}'@'%' IDENTIFIED BY '{password}';")
                 sql_commands.append(f"ALTER USER '{username}'@'%' IDENTIFIED BY '{password}';")
                 sql_commands.append(f"GRANT {privileges} ON {db_name}.* TO '{username}'@'%';")
@@ -151,31 +171,39 @@ if uploaded_file is not None and db_pass:
 
             sql_commands.append("FLUSH PRIVILEGES;")
             
-            # Execution
+            # Execute SQL
             if not dry_run:
                 try:
-                    # Używamy nowej funkcji z obsługą auth_plugin
                     conn = get_db_connection(db_host, db_port, db_user, db_pass, enterprise_auth)
                     cursor = conn.cursor()
                     for sql in sql_commands:
                         cursor.execute(sql)
                     conn.commit()
                     conn.close()
-                    logs.append(f"✅ {project}: Configured on port {db_port}.")
+                    logs.append(f"✅ {project}: Successfully configured on port {db_port}.")
                 except Error as e:
                     logs.append(f"❌ {project}: SQL Error - {e}")
             else:
-                logs.append(f"ℹ️ {project}: Simulation OK.")
+                logs.append(f"ℹ️ {project}: Simulation OK ({len(sql_commands)} commands prepared).")
             
+            # Generate Output Files
             create_local_files(project, env, project_users, db_host, db_port)
             progress_bar.progress((index + 1) / total_rows)
 
-        st.success("Provisioning Completed!")
+        # Final Summary
+        st.success("Provisioning Workflow Completed!")
         for log in logs:
             st.text(log)
             
+        # Export Master Report
         master_df = pd.DataFrame(master_list)
-        master_df.to_excel(os.path.join("DIST_TEMP", "MASTER_PASSWORDS_SECURE.xlsx"), index=False)
+        master_filename = "MASTER_PASSWORDS_SECURE.xlsx"
+        master_df.to_excel(os.path.join("DIST_TEMP", master_filename), index=False)
         
-        with open(os.path.join("DIST_TEMP", "MASTER_PASSWORDS_SECURE.xlsx"), "rb") as f:
+        with open(os.path.join("DIST_TEMP", master_filename), "rb") as f:
             st.download_button("📥 Download Secure Master Report", f, file_name="Master_Credentials.xlsx")
+
+        st.info("Developer .env files have been generated in the 'DIST_TEMP' folder.")
+
+elif uploaded_file is not None and not db_pass:
+    st.warning("⚠️ Please enter the Admin Password in the sidebar to proceed.")
