@@ -35,5 +35,22 @@ Generates two sets of deliverables per run:
 3. **Run Provisioning:** The tool executes idempotent SQL commands (`CREATE IF NOT EXISTS`, `ALTER USER`) to ensure safe re-runs.
 4. **Distribute:** Download the secured Master Report and distribute generated `.env` files to dev teams.
 
+## 📊 Input File Structure
+The application requires an Excel file (`.xlsx`) with exactly three columns.
+
+**Required Headers:**
+* `Project_Name`: Name of the service/db (e.g. `ECommerce`)
+* `Environment`: Target env (e.g. `PROD`, `DEV`)
+* `Roles`: Comma-separated list of roles (e.g. `app, dbo, read`)
+
+**Example Data:**
+
+| Project_Name | Environment | Roles |
+| :--- | :--- | :--- |
+| MyApp | PROD | app, dbo, read |
+| AnalyticsDB | STAGE | report, analytics |
+| LegacySystem | DEV | owner, migrator |
+
+> 💡 **Tip:** You can download the [example_input.xlsx](example_input.xlsx) file from this repository to get started quickly.
 ---
 *Author: Kacper Luźniak*
