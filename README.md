@@ -1,26 +1,39 @@
-# 🐬 MySQL Provisioning Automator
+# 🛡️ Enterprise MySQL Provisioning Tool
 
-An "Infrastructure as Code" (IaC) tool for bulk management of MySQL users and permissions, featuring a modern Streamlit-based GUI.
+A professional "Infrastructure as Code" (IaC) solution for automating database provisioning, user management, and access control compliance. Designed for high-security environments (Bank/FinTech).
 
 ## 🚀 Key Features
-* **Security First:** Automatically generates cryptographically strong passwords (20 chars, mixed case, special chars).
-* **Hybrid Output:** Generates a **Master Report** for Administrators (Excel) and ready-to-use **.env configuration files** for Developer teams.
-* **Idempotency:** Safe to run multiple times. The script handles existing users (updates passwords/grants) without throwing errors.
-* **User-Friendly GUI:** No CLI knowledge required. Just drag & drop your requirements.
+
+### 1. Security & Compliance (RBAC)
+Implements **Role-Based Access Control** based on the Principle of Least Privilege:
+* **DBO/Admin:** Full access (`ALL PRIVILEGES`).
+* **App/Batch:** Data manipulation only (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `EXECUTE`).
+* **READ/Analytics:** Read-only access (`SELECT`).
+
+### 2. Enterprise Authentication
+* Supports standard native authentication.
+* **LDAP/PAM/IDM Support:** Includes `mysql_clear_password` plugin support for corporate directory integration (Active Directory).
+
+### 3. Hybrid Output
+Generates two sets of deliverables per run:
+* **For Admins:** A Master Excel Report containing all credentials, hosts, and assigned privileges.
+* **For Developers:** Ready-to-use `.env` configuration files (including `DB_HOST`, `DB_PORT`, `DB_NAME`).
+
+### 4. Advanced Connectivity
+* Support for **Custom Ports** (essential for multi-instance servers).
+* Remote and Local provisioning capabilities.
 
 ## 🛠 Tech Stack
 * **Core:** Python 3.9+
-* **Database:** MySQL Connector
-* **Data Processing:** Pandas
-* **UI:** Streamlit
+* **UI:** Streamlit (No-Code interface for Ops teams)
+* **Database:** MySQL Connector (w/ Enterprise Auth support)
+* **Data:** Pandas (Excel processing)
 
-## 💡 The Problem Solved
-In Enterprise environments, manually provisioning users for multiple microservices (Dev/Test/Prod) is time-consuming and error-prone. This tool reduces the process to 30 seconds, ensuring full compliance with security policies (RBAC).
-
-## 📸 How to use
-1. Upload an Excel file with project definitions (`Project_Name`, `Environment`, `Roles`).
-2. Configure the database connection in the sidebar (supports Local & Remote).
-3. Click "Run Provisioning" - the tool executes SQL commands and generates deployment packages.
+## 📸 Usage Workflow
+1. **Upload Projects:** Drag & drop an Excel file with columns: `Project_Name`, `Environment`, `Roles`.
+2. **Configure Connection:** Set Host, Port, and authenticate via Root or LDAP credentials in the Sidebar.
+3. **Run Provisioning:** The tool executes idempotent SQL commands (`CREATE IF NOT EXISTS`, `ALTER USER`) to ensure safe re-runs.
+4. **Distribute:** Download the secured Master Report and distribute generated `.env` files to dev teams.
 
 ---
-*Author: Kacper Luźniak
+*Author: Kacper Luźniak*
