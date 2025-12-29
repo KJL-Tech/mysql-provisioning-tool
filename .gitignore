@@ -1,0 +1,5 @@
+__pycache__/
+DIST_TEMP/
+*.xlsx
+*.env
+.DS_Store
