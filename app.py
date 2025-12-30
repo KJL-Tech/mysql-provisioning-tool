@@ -74,7 +74,10 @@ if uploaded_file is not None and db_pass:
                 total_rows = len(df)
                 has_errors = False
                 
+                backend.log_audit(f"Start Provisioning Batch: {len(df)} rows found.", "INFO")
+                
                 for index, row in df.iterrows():
+
                     # --- INPUT VALIDATION ---
                     try:
                         project = backend.validate_identifier(str(row['Project_Name']).strip())
@@ -85,6 +88,7 @@ if uploaded_file is not None and db_pass:
                             roles.append(backend.validate_identifier(r.strip()))
                     except ValueError as ve:
                         logs.append(f"❌ ROW {index+1}: Validation Error - {ve}")
+                        backend.log_audit(f"Validation Failed for Row {index+1}: {ve}", "WARNING")
                         has_errors = True
                         progress_bar.progress((index + 1) / total_rows)
                         continue
@@ -130,10 +134,13 @@ if uploaded_file is not None and db_pass:
                             conn.commit()
                             conn.close()
                             logs.append(f"✅ {project}: Successfully configured on port {db_port}.")
+                            backend.log_audit(f"SUCCESS: Provisioned project '{project}' on {db_host}:{db_port}", "INFO")
                         except Error as e:
                             logs.append(f"❌ {project}: SQL Error - {e}")
+                            backend.log_audit(f"FAILURE: SQL Error for '{project}': {e}", "ERROR")
                     else:
                         logs.append(f"ℹ️ {project}: Simulation OK ({len(sql_commands)} commands prepared).")
+                        backend.log_audit(f"SIMULATION: Prepared {len(sql_commands)} commands for '{project}'", "INFO")
                     
                     # Generate Output Files
                     backend.create_local_files(project, env, project_users, db_host, db_port)
@@ -152,16 +159,37 @@ if uploaded_file is not None and db_pass:
                 if master_list:
                     master_df = pd.DataFrame(master_list)
                     master_filename = "MASTER_PASSWORDS_SECURE.xlsx"
-                    master_df.to_excel(os.path.join("DIST_TEMP", master_filename), index=False)
+                    master_path = os.path.join("DIST_TEMP", master_filename)
+                    master_df.to_excel(master_path, index=False)
                     
-                    st.warning("⚠️ **SECURITY WARNING**: The Master Credentials file below contains PLAINTEXT passwords. Delete it after secure distribution!")
+                    st.warning("⚠️ **SECURITY WARNING**: The Master Credentials file contains plaintext passwords.")
                     
-                    with open(os.path.join("DIST_TEMP", master_filename), "rb") as f:
-                        st.download_button("📥 Download Secure Master Report", f, file_name="Master_Credentials.xlsx")
+                    # Encryption Section
+                    st.markdown("### 🔒 Secure Export")
+                    enc_pass = st.text_input("Set Encryption Password for Export", type="password", help="This password will be required to open the downloaded ZIP file.")
+                    
+                    if enc_pass:
+                        try:
+                            zip_path = backend.compress_and_encrypt(master_path, enc_pass)
+                            zip_filename = os.path.basename(zip_path)
+                            
+                            with open(zip_path, "rb") as f:
+                                st.download_button(
+                                    f"📥 Download Encrypted Report (.zip)", 
+                                    f, 
+                                    file_name="Master_Credentials_SECURE.zip",
+                                    mime="application/zip"
+                                )
+                            st.success("✅ File ready for secure download.")
+                        except Exception as e:
+                            st.error(f"Encryption failed: {e}")
+                    else:
+                        st.info("Enter a password above to enable the download button.")
 
                 st.info("Developer .env files have been generated in the 'DIST_TEMP' folder.")
     except Exception as e:
         st.error(f"Error reading Excel file: {e}")
+        backend.log_audit(f"CRITICAL ERROR: Failed to process Excel file. {e}", "ERROR")
 
 elif uploaded_file is not None and not db_pass:
     st.warning("⚠️ Please enter the Admin Password in the sidebar to proceed.")

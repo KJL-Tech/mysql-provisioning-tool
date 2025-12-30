@@ -3,3 +3,4 @@ DIST_TEMP/
 *.xlsx
 *.env
 .DS_Store
+audit_log.txt

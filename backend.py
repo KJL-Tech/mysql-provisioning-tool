@@ -1,9 +1,45 @@
+import logging
 import re
 import secrets
 import string
 import os
 import mysql.connector
+import pyzipper
 from datetime import datetime
+
+# --- CONFIGURATION ---
+logging.basicConfig(
+    filename='audit_log.txt',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+def log_audit(message, level="INFO"):
+    """Logs an audit event to the file."""
+    if level.upper() == "ERROR":
+        logging.error(message)
+    elif level.upper() == "WARNING":
+        logging.warning(message)
+    else:
+        logging.info(message)
+
+def compress_and_encrypt(file_path, password):
+    """
+    Compresses a file into an encrypted ZIP (AES-256).
+    Returns the path to the new ZIP file.
+    """
+    base_name = os.path.basename(file_path)
+    zip_path = file_path.replace(".xlsx", ".zip")
+    
+    # Ensure usage of bytes for password
+    pwd_bytes = password.encode('utf-8')
+    
+    with pyzipper.AESZipFile(zip_path, 'w', compression=pyzipper.ZIP_LZMA, encryption=pyzipper.WZ_AES) as zf:
+        zf.setpassword(pwd_bytes)
+        zf.write(file_path, base_name)
+        
+    return zip_path
+
 
 # --- SECURITY LOGIC (RBAC) ---
 def get_privileges_by_role(role_name):
