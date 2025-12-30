@@ -1,89 +1,12 @@
 import streamlit as st
 import pandas as pd
-import secrets
-import string
 import os
-import mysql.connector
-from datetime import datetime
-from mysql.connector import Error
 import shutil
+from mysql.connector import Error
+import backend  # Import logical backend
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="MySQL Provisioner Pro", page_icon="🛡️")
-
-# --- SECURITY LOGIC (RBAC) ---
-def get_privileges_by_role(role_name):
-    """
-    Maps the business role (from Excel) to specific MySQL Privileges.
-    Implements the Principle of Least Privilege (PoLP).
-    """
-    role_upper = role_name.upper().strip()
-    
-    # 1. ADMINS / OWNERS (Full Control)
-    if role_upper in ['DBO', 'ADMIN', 'OWNER', 'MIGRATOR']:
-        return "ALL PRIVILEGES"
-    
-    # 2. READ ONLY (Reporting, Analytics) - Changed primary role to READ
-    elif role_upper in ['READ', 'READER', 'RO', 'REPORT', 'ANALYTICS']:
-        return "SELECT"
-    
-    # 3. STANDARD APP / BATCH (Data Manipulation - No DDL)
-    else:
-        return "SELECT, INSERT, UPDATE, DELETE, EXECUTE, SHOW VIEW"
-
-# --- HELPER FUNCTIONS ---
-def generate_password(length=20):
-    """Generates a cryptographically secure, random password."""
-    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
-    while True:
-        password = ''.join(secrets.choice(alphabet) for i in range(length))
-        if (any(c.islower() for c in password) 
-                and any(c.isupper() for c in password) 
-                and sum(c.isdigit() for c in password) >= 3):
-            return password
-
-def create_local_files(project_name, env, users_data, db_host, db_port):
-    """Generates folder structure and .env files locally for distribution."""
-    folder_name = f"{project_name}_{env}"
-    base_path = os.path.join("DIST_TEMP", folder_name)
-    os.makedirs(base_path, exist_ok=True)
-    
-    env_content = f"# Auto-generated config for {project_name} ({env})\n"
-    env_content += f"# Generated on: {datetime.now()}\n"
-    env_content += f"DB_HOST={db_host}\n"
-    env_content += f"DB_PORT={db_port}\n"
-    
-    db_name = f"{project_name.lower()}_{env.lower()}"
-    env_content += f"DB_NAME={db_name}\n\n"
-    
-    for user in users_data:
-        role = user['role'].upper()
-        privs = user['privileges']
-        env_content += f"# Role: {role} (Privileges: {privs})\n"
-        env_content += f"DB_USER_{role}={user['user']}\n"
-        env_content += f"DB_PASS_{role}={user['password']}\n"
-    
-    with open(os.path.join(base_path, ".env"), "w") as f:
-        f.write(env_content)
-
-def get_db_connection(host, port, user, password, use_enterprise_auth):
-    """
-    Handles database connection. 
-    Supports standard auth and Enterprise Auth (LDAP/PAM) via mysql_clear_password.
-    """
-    config = {
-        'host': host,
-        'port': int(port),
-        'user': user,
-        'password': password,
-        'connect_timeout': 10
-    }
-    
-    # Key configuration for IDM/LDAP/PAM authentication
-    if use_enterprise_auth:
-        config['auth_plugin'] = 'mysql_clear_password'
-    
-    return mysql.connector.connect(**config)
 
 # --- USER INTERFACE (UI) ---
 st.title("🛡️ MySQL Provisioning Tool (Enterprise)")
@@ -104,15 +27,18 @@ with st.sidebar:
     enterprise_auth = st.checkbox("Enterprise Auth (LDAP/PAM/IDM)", value=False, help="Enable this for Active Directory/LDAP credentials.")
     
     if st.button("Test Connection"):
-        try:
-            conn = get_db_connection(db_host, db_port, db_user, db_pass, enterprise_auth)
-            if conn.is_connected():
-                st.success(f"Connected to {db_host} as {db_user} successfully!")
-                conn.close()
-        except Error as e:
-            st.error(f"Connection Failed: {e}")
-        except ValueError:
-            st.error("Port must be a valid number!")
+        if not db_port.isdigit():
+             st.error("Port must be a valid number!")
+        else:
+            try:
+                conn = backend.get_db_connection(db_host, db_port, db_user, db_pass, enterprise_auth)
+                if conn.is_connected():
+                    st.success(f"Connected to {db_host} as {db_user} successfully!")
+                    conn.close()
+            except Error as e:
+                st.error(f"Connection Failed: {e}")
+            except ValueError:
+                st.error("Port must be a valid number!")
 
 # Main Section - File Upload
 st.header("1. Upload Project Definitions")
@@ -120,90 +46,122 @@ st.info("Required Excel columns: `Project_Name`, `Environment`, `Roles` (e.g. ap
 uploaded_file = st.file_uploader("Select Excel File", type=['xlsx'])
 
 if uploaded_file is not None and db_pass:
-    df = pd.read_excel(uploaded_file)
-    st.dataframe(df.head())
-    
-    col1, col2 = st.columns(2)
-    dry_run = col1.checkbox("Simulation Mode (Dry Run - No DB changes)", value=True)
-    
-    if st.button("🚀 RUN PROVISIONING", type="primary"):
-        # Clean up previous temporary files
-        if os.path.exists("DIST_TEMP"):
-            shutil.rmtree("DIST_TEMP")
-        os.makedirs("DIST_TEMP")
+    try:
+        df = pd.read_excel(uploaded_file)
         
-        progress_bar = st.progress(0)
-        master_list = []
-        logs = []
+        # Verify required columns
+        required_columns = ['Project_Name', 'Environment', 'Roles']
+        missing_columns = [col for col in required_columns if col not in df.columns]
         
-        total_rows = len(df)
-        
-        for index, row in df.iterrows():
-            project = row['Project_Name']
-            env = row['Environment']
-            roles = [r.strip() for r in row['Roles'].split(',')]
-            db_name = f"{project.lower()}_{env.lower()}"
+        if missing_columns:
+            st.error(f"❌ Missing required columns: {', '.join(missing_columns)}")
+        else:
+            st.dataframe(df.head())
             
-            # Prepare SQL Commands
-            sql_commands = []
-            sql_commands.append(f"CREATE DATABASE IF NOT EXISTS {db_name} CHARACTER SET utf8mb4;")
+            col1, col2 = st.columns(2)
+            dry_run = col1.checkbox("Simulation Mode (Dry Run - No DB changes)", value=True)
             
-            project_users = []
-            
-            for role in roles:
-                username = f"{project.lower()}_{env.lower()}_{role.lower()}"
-                password = generate_password()
+            if st.button("🚀 RUN PROVISIONING", type="primary"):
+                # Clean up previous temporary files
+                if os.path.exists("DIST_TEMP"):
+                    shutil.rmtree("DIST_TEMP")
+                os.makedirs("DIST_TEMP")
                 
-                # Determine privileges based on role
-                privileges = get_privileges_by_role(role)
+                progress_bar = st.progress(0)
+                master_list = []
+                logs = []
                 
-                # Idempotent user creation logic
-                sql_commands.append(f"CREATE USER IF NOT EXISTS '{username}'@'%' IDENTIFIED BY '{password}';")
-                sql_commands.append(f"ALTER USER '{username}'@'%' IDENTIFIED BY '{password}';")
-                sql_commands.append(f"GRANT {privileges} ON {db_name}.* TO '{username}'@'%';")
+                total_rows = len(df)
+                has_errors = False
                 
-                master_list.append({
-                    'Project': project, 'Env': env, 'Role': role,
-                    'Privileges': privileges, 'User': username, 'Pass': password,
-                    'Host': f"{db_host}:{db_port}"
-                })
-                project_users.append({'role': role, 'user': username, 'password': password, 'privileges': privileges})
+                for index, row in df.iterrows():
+                    # --- INPUT VALIDATION ---
+                    try:
+                        project = backend.validate_identifier(str(row['Project_Name']).strip())
+                        env = backend.validate_identifier(str(row['Environment']).strip())
+                        raw_roles = str(row['Roles']).split(',')
+                        roles = []
+                        for r in raw_roles:
+                            roles.append(backend.validate_identifier(r.strip()))
+                    except ValueError as ve:
+                        logs.append(f"❌ ROW {index+1}: Validation Error - {ve}")
+                        has_errors = True
+                        progress_bar.progress((index + 1) / total_rows)
+                        continue
+                    # ------------------------
 
-            sql_commands.append("FLUSH PRIVILEGES;")
-            
-            # Execute SQL
-            if not dry_run:
-                try:
-                    conn = get_db_connection(db_host, db_port, db_user, db_pass, enterprise_auth)
-                    cursor = conn.cursor()
-                    for sql in sql_commands:
-                        cursor.execute(sql)
-                    conn.commit()
-                    conn.close()
-                    logs.append(f"✅ {project}: Successfully configured on port {db_port}.")
-                except Error as e:
-                    logs.append(f"❌ {project}: SQL Error - {e}")
-            else:
-                logs.append(f"ℹ️ {project}: Simulation OK ({len(sql_commands)} commands prepared).")
-            
-            # Generate Output Files
-            create_local_files(project, env, project_users, db_host, db_port)
-            progress_bar.progress((index + 1) / total_rows)
+                    db_name = f"{project.lower()}_{env.lower()}"
+                    
+                    # Prepare SQL Commands
+                    sql_commands = []
+                    sql_commands.append(f"CREATE DATABASE IF NOT EXISTS {db_name} CHARACTER SET utf8mb4;")
+                    
+                    project_users = []
+                    
+                    for role in roles:
+                        username = f"{project.lower()}_{env.lower()}_{role.lower()}"
+                        password = backend.generate_password()
+                        
+                        # Determine privileges based on role
+                        privileges = backend.get_privileges_by_role(role)
+                        
+                        # Idempotent user creation logic
+                        sql_commands.append(f"CREATE USER IF NOT EXISTS '{username}'@'%' IDENTIFIED BY '{password}';")
+                        sql_commands.append(f"ALTER USER '{username}'@'%' IDENTIFIED BY '{password}';")
+                        sql_commands.append(f"GRANT {privileges} ON {db_name}.* TO '{username}'@'%';")
+                        
+                        master_list.append({
+                            'Project': project, 'Env': env, 'Role': role,
+                            'Privileges': privileges, 'User': username, 'Pass': password,
+                            'Host': f"{db_host}:{db_port}"
+                        })
+                        project_users.append({'role': role, 'user': username, 'password': password, 'privileges': privileges})
 
-        # Final Summary
-        st.success("Provisioning Workflow Completed!")
-        for log in logs:
-            st.text(log)
-            
-        # Export Master Report
-        master_df = pd.DataFrame(master_list)
-        master_filename = "MASTER_PASSWORDS_SECURE.xlsx"
-        master_df.to_excel(os.path.join("DIST_TEMP", master_filename), index=False)
-        
-        with open(os.path.join("DIST_TEMP", master_filename), "rb") as f:
-            st.download_button("📥 Download Secure Master Report", f, file_name="Master_Credentials.xlsx")
+                    sql_commands.append("FLUSH PRIVILEGES;")
+                    
+                    # Execute SQL
+                    if not dry_run:
+                        try:
+                            # Use backend connection
+                            conn = backend.get_db_connection(db_host, db_port, db_user, db_pass, enterprise_auth)
+                            cursor = conn.cursor()
+                            for sql in sql_commands:
+                                cursor.execute(sql)
+                            conn.commit()
+                            conn.close()
+                            logs.append(f"✅ {project}: Successfully configured on port {db_port}.")
+                        except Error as e:
+                            logs.append(f"❌ {project}: SQL Error - {e}")
+                    else:
+                        logs.append(f"ℹ️ {project}: Simulation OK ({len(sql_commands)} commands prepared).")
+                    
+                    # Generate Output Files
+                    backend.create_local_files(project, env, project_users, db_host, db_port)
+                    progress_bar.progress((index + 1) / total_rows)
 
-        st.info("Developer .env files have been generated in the 'DIST_TEMP' folder.")
+                # Final Summary
+                st.markdown("---")
+                if has_errors:
+                     st.error("Some rows failed validation. Please check the logs below.")
+                
+                st.success("Provisioning Workflow Completed!")
+                for log in logs:
+                    st.text(log)
+                    
+                # Export Master Report
+                if master_list:
+                    master_df = pd.DataFrame(master_list)
+                    master_filename = "MASTER_PASSWORDS_SECURE.xlsx"
+                    master_df.to_excel(os.path.join("DIST_TEMP", master_filename), index=False)
+                    
+                    st.warning("⚠️ **SECURITY WARNING**: The Master Credentials file below contains PLAINTEXT passwords. Delete it after secure distribution!")
+                    
+                    with open(os.path.join("DIST_TEMP", master_filename), "rb") as f:
+                        st.download_button("📥 Download Secure Master Report", f, file_name="Master_Credentials.xlsx")
+
+                st.info("Developer .env files have been generated in the 'DIST_TEMP' folder.")
+    except Exception as e:
+        st.error(f"Error reading Excel file: {e}")
 
 elif uploaded_file is not None and not db_pass:
     st.warning("⚠️ Please enter the Admin Password in the sidebar to proceed.")
